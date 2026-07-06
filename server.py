@@ -4,11 +4,13 @@ load_dotenv()
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Annotated
+from typing import Annotated, Any, Dict, List, Optional
+from urllib.parse import unquote
 
 import cognee
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from models import SidecarAuditRequest, SidecarAuditResult
 from pipeline import run_audit_pipeline
@@ -18,7 +20,6 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s — %(message)s",
 )
 logger = logging.getLogger(__name__)
-
 
 _REQUIRED_ENV = [
     "COGNEE_SIDECAR_TOKEN",
@@ -39,10 +40,6 @@ def _check_required_env() -> None:
 async def lifespan(app: FastAPI):
     _check_required_env()
 
-    # Cognee reads its configuration (LLM provider, vector DB, etc.) from
-    # environment variables automatically when running on cognee/cognee:main.
-    # We do a lightweight prune-free config touch here only to surface
-    # any misconfiguration early, before the first real audit request.
     try:
         cognee.config.set_llm_config(
             {
@@ -60,33 +57,22 @@ async def lifespan(app: FastAPI):
     logger.info("Wyrmkeep sidecar shutting down")
 
 
-
 app = FastAPI(
     title="Wyrmkeep Sidecar",
     description="Slither + Cognee audit pipeline for Wyrmkeep",
     version="0.1.0",
     lifespan=lifespan,
-    # Disable the default /docs and /redoc in production if desired
-    # docs_url=None,
-    # redoc_url=None,
 )
 
 
-_SIDECAR_TOKEN: str = ""  # populated after env check in lifespan
-
 
 def _get_token() -> str:
-    """Lazily read the token after lifespan has validated it exists."""
     return os.environ["COGNEE_SIDECAR_TOKEN"]
 
 
 def verify_token(
     authorization: Annotated[str | None, Header()] = None,
 ) -> None:
-    """
-    Validate the Bearer token sent by Axum.
-    Header format: Authorization: Bearer <COGNEE_SIDECAR_TOKEN>
-    """
     if not authorization:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -110,10 +96,188 @@ def verify_token(
 
 
 
+class AddRequest(BaseModel):
+    content: str
+    dataset: str
+    tags: List[str] = Field(default_factory=list)
+
+
+class AddResponse(BaseModel):
+    id: str
+
+
+class RecallRequest(BaseModel):
+    query: str
+    dataset: str
+    top_k: int = 5
+
+
+class MemoryMatch(BaseModel):
+    id: str
+    content: str
+    score: float
+
+
+class RecallResponse(BaseModel):
+    matches: List[MemoryMatch]
+
+
+class StatsResponse(BaseModel):
+    nodes: int
+    edges: int
+
+
 
 @app.get("/health", include_in_schema=False)
 async def health() -> dict:
     return {"status": "ok", "service": "wyrmkeep-sidecar"}
+
+
+
+@app.get("/memory/ping")
+async def memory_ping(
+    _: Annotated[None, Depends(verify_token)],
+) -> dict:
+    """Liveness check for the memory API specifically."""
+    return {"status": "ok"}
+
+
+@app.post("/memory/add")
+async def memory_add(
+    request: AddRequest,
+    _: Annotated[None, Depends(verify_token)],
+) -> AddResponse:
+    """
+    Add content to a Cognee dataset.
+    Returns a stable ID derived from dataset + content for Axum to track.
+    """
+    logger.info("memory/add dataset=%s tags=%s", request.dataset, request.tags)
+
+    try:
+        await cognee.add(
+            request.content,
+            dataset_name=request.dataset,
+            node_set=request.tags if request.tags else None,
+        )
+    except Exception as exc:
+        logger.error("cognee.add failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"cognee.add failed: {exc}",
+        )
+
+    # Cognee's add() doesn't return a UUID — generate a deterministic one
+    # from dataset + content so Axum has a stable ID to reference.
+    import hashlib
+    import uuid
+    digest = hashlib.sha256(
+        f"{request.dataset}:{request.content}".encode()
+    ).digest()[:16]
+    node_id = str(uuid.UUID(bytes=digest))
+
+    logger.info("memory/add complete dataset=%s id=%s", request.dataset, node_id)
+    return AddResponse(id=node_id)
+
+
+@app.post("/memory/recall")
+async def memory_recall(
+    request: RecallRequest,
+    _: Annotated[None, Depends(verify_token)],
+) -> RecallResponse:
+    """
+    Search Cognee memory for content similar to the query.
+    Returns ranked matches with scores.
+    """
+    logger.info(
+        "memory/recall dataset=%s query=%s top_k=%d",
+        request.dataset,
+        request.query,
+        request.top_k,
+    )
+
+    try:
+        results = await cognee.search(
+            query_text=request.query,
+            query_type="GRAPH_COMPLETION",
+            datasets=[request.dataset],
+        )
+    except Exception as exc:
+        logger.error("cognee.search failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"cognee.search failed: {exc}",
+        )
+
+    matches: List[MemoryMatch] = []
+    for i, result in enumerate(results[: request.top_k]):
+        # Cognee search results vary by version — handle both dict and object
+        if isinstance(result, dict):
+            content = result.get("text") or result.get("content") or str(result)
+            score = float(result.get("score", 1.0 - i * 0.1))
+            node_id = str(result.get("id", f"match-{i}"))
+        else:
+            content = getattr(result, "text", None) or getattr(result, "content", str(result))
+            score = float(getattr(result, "score", 1.0 - i * 0.1))
+            node_id = str(getattr(result, "id", f"match-{i}"))
+
+        matches.append(MemoryMatch(id=node_id, content=content, score=score))
+
+    logger.info("memory/recall returned %d matches", len(matches))
+    return RecallResponse(matches=matches)
+
+
+@app.delete("/memory/dataset/{dataset:path}")
+async def memory_forget_dataset(
+    dataset: str,
+    _: Annotated[None, Depends(verify_token)],
+) -> dict:
+    """
+    Delete an entire Cognee dataset (GDPR / confidentiality compliance).
+    dataset path param is percent-decoded automatically by FastAPI.
+    """
+    # Colons are encoded as %3A by Axum's urlencoding helper — decode them
+    decoded = unquote(dataset)
+    logger.info("memory/forget dataset=%s", decoded)
+
+    try:
+        await cognee.delete_dataset(decoded)
+    except Exception as exc:
+        logger.error("cognee.delete_dataset failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete dataset: {exc}",
+        )
+
+    logger.info("memory/forget complete dataset=%s", decoded)
+    return {"deleted": decoded}
+
+
+@app.get("/memory/stats/{dataset:path}")
+async def memory_stats(
+    dataset: str,
+    _: Annotated[None, Depends(verify_token)],
+) -> StatsResponse:
+    """
+    Return node and edge counts for a dataset.
+    """
+    decoded = unquote(dataset)
+    logger.info("memory/stats dataset=%s", decoded)
+
+    try:
+        graph_data = await cognee.visualize_graph(datasets=[decoded])
+        nodes = len(graph_data.get("nodes", []))
+        edges = len(graph_data.get("edges", []))
+    except Exception as exc:
+        logger.warning(
+            "cognee.visualize_graph failed for dataset=%s: %s — returning zeros",
+            decoded,
+            exc,
+        )
+        # Stats failure is non-fatal — return zeros rather than 500
+        nodes, edges = 0, 0
+
+    return StatsResponse(nodes=nodes, edges=edges)
+
 
 
 @app.post("/audit")
@@ -123,13 +287,8 @@ async def audit(
 ) -> JSONResponse:
     """
     Single audit endpoint consumed by Axum's SidecarClient.
-
     Accepts raw Solidity source, runs Slither, runs Cognee cognify,
-    returns SidecarAuditResult as JSON. One call per audit — no separate
-    /analyze or /cognify endpoints exist.
-
-    The JSON response uses field aliases (e.g. `type` not `element_type`)
-    to match Axum's serde deserialization expectations exactly.
+    returns SidecarAuditResult. One call per audit.
     """
     logger.info(
         "Audit request: contract=%s dataset=%s node_set=%s",
@@ -146,7 +305,6 @@ async def audit(
             node_set=request.node_set,
         )
     except RuntimeError as exc:
-        # Slither binary missing — sidecar is misconfigured
         logger.error("Sidecar misconfigured: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -171,6 +329,4 @@ async def audit(
         elapsed_ms,
     )
 
-    # Use by_alias=True so SlitherElement serializes `type` not `element_type`,
-    # matching Axum's #[serde(rename = "type")] expectation.
     return JSONResponse(content=result.model_dump(by_alias=True))
