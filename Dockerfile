@@ -4,22 +4,21 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# System dependencies + Node.js for solcjs
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         curl \
         git \
-        nodejs \
-        npm \
     && rm -rf /var/lib/apt/lists/*
 
-# Install solc via npm
-RUN npm install -g solc
+# Install solc-select and a pinned solc version
+RUN pip install --no-cache-dir solc-select \
+    && solc-select install 0.8.20 \
+    && solc-select use 0.8.20
 
-# Verify solcjs is available
-RUN node -e "require('solc')" && echo "solcjs OK"
+# Verify solc is on PATH
+RUN solc --version
 
-# Install Slither on top of the cognee base image
+# Install Slither
 RUN pip install --no-cache-dir slither-analyzer
 
 # Verify Slither is on PATH
@@ -32,8 +31,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY models.py pipeline.py server.py ./
 
-# Override whatever CMD/ENTRYPOINT the base image defines.
-# We run our own FastAPI server — not Cognee's built-in server.
 ENTRYPOINT []
 EXPOSE 8000
 CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
