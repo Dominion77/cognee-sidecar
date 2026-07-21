@@ -13,10 +13,10 @@ from models import SlitherDetector, SlitherElement, SlitherReport
 logger = logging.getLogger(__name__)
 
 # Slither exit codes:
-#   0  — success, no detectors triggered
-#   1  — success, detectors triggered (findings found) — NOT an error
-#   2  — compilation failure
-#   255 — internal Slither error
+#   0   — success, no detectors triggered
+#   1   — success, detectors triggered (findings found) — NOT an error
+#   2   — compilation failure
+#   255 — internal Slither error (commonly: solc not found or wrong version)
 _SLITHER_ERROR_THRESHOLD = 2
 
 
@@ -26,10 +26,9 @@ async def run_slither(source_code: str, contract_name: str) -> SlitherReport:
     parse the result, and clean up. Never raises — returns a failed
     SlitherReport on all error paths so the caller always gets a result.
     """
-    tmp_path: Optional[str] = None
+    tmp_path: str | None = None
 
     try:
-        # NamedTemporaryFile with delete=False so we control cleanup
         with tempfile.NamedTemporaryFile(
             mode="w",
             suffix=".sol",
@@ -63,29 +62,37 @@ async def run_slither(source_code: str, contract_name: str) -> SlitherReport:
         stdout_text = stdout_bytes.decode("utf-8", errors="replace").strip()
         stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
 
+        # Always log stderr so Render logs show the actual Slither error
+        # instead of silence — critical for debugging solc issues
         if stderr_text:
-            logger.debug("Slither stderr [%s]: %s", contract_name, stderr_text)
+            logger.info(
+                "Slither stderr [%s]: %s",
+                contract_name,
+                stderr_text[:2000],
+            )
 
-        # Exit code >= 2 means compilation failure or internal error.
-        # Exit codes 0 and 1 both indicate successful analysis.
+        # Exit code 0 = no findings, exit code 1 = findings found — both success.
+        # Exit code 2+ = compilation failure or internal error.
+        # Exit code 255 = Slither internal error (solc missing/wrong version).
         if proc.returncode is not None and proc.returncode >= _SLITHER_ERROR_THRESHOLD:
             logger.error(
-                "Slither error (exit=%d) for contract=%s: %s",
+                "Slither error (exit=%d) for contract=%s stdout=%r stderr=%r",
                 proc.returncode,
                 contract_name,
+                stdout_text[:500],
                 stderr_text[:500],
             )
             return SlitherReport(success=False, detectors=[])
 
         if not stdout_text:
-            logger.warning("Slither produced no stdout for contract=%s", contract_name)
+            logger.warning(
+                "Slither produced no stdout for contract=%s", contract_name
+            )
             return SlitherReport(success=True, detectors=[])
 
         return _parse_slither_json(stdout_text, contract_name)
 
     except FileNotFoundError:
-        # slither binary is not in PATH — configuration error, should never
-        # happen in production but we surface it clearly
         logger.error("Slither binary not found in PATH")
         raise RuntimeError(
             "slither not found — ensure slither-analyzer is installed in the container"
@@ -158,9 +165,8 @@ def _build_cognee_text(
     """
     Serialize SlitherReport into structured plain text for Cognee ingestion.
     Contract-identifying names from the Solidity source are NOT present here —
-    Slither element names (function names, variable names) are included because
-    the anonymization step happens in the Axum PatternAbstractor after this
-    response returns. This text is for Cognee's graph extraction only.
+    Slither element names are included because the anonymization step happens
+    in the Axum PatternAbstractor after this response returns.
     """
     lines = [
         f"Contract: {contract_name}",
@@ -198,7 +204,8 @@ async def run_cognee_pipeline(
     """
     if not report.detectors:
         logger.info(
-            "No detectors for contract=%s — skipping Cognee ingestion", contract_name
+            "No detectors for contract=%s — skipping Cognee ingestion",
+            contract_name,
         )
         return
 
@@ -234,8 +241,6 @@ async def run_audit_pipeline(
     try:
         await run_cognee_pipeline(slither_report, contract_name, dataset, node_set)
     except Exception as exc:
-        # Cognee graph extraction failure is non-fatal for the audit result.
-        # The SlitherReport is still valid and useful to Axum.
         logger.error(
             "Cognee pipeline failed for contract=%s dataset=%s: %s",
             contract_name,

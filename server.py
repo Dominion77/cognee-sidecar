@@ -4,7 +4,7 @@ load_dotenv()
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Annotated, Any, List, Optional
 from urllib.parse import unquote
 
 import cognee
@@ -63,6 +63,7 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
 
 
 
@@ -233,19 +234,18 @@ async def memory_forget_dataset(
 ) -> dict:
     """
     Delete an entire Cognee dataset (GDPR / confidentiality compliance).
-    dataset path param is percent-decoded automatically by FastAPI.
+    Uses cognee.forget() — correct API for Cognee 1.2.2+.
     """
-    # Colons are encoded as %3A by Axum's urlencoding helper — decode them
     decoded = unquote(dataset)
     logger.info("memory/forget dataset=%s", decoded)
 
     try:
-        await cognee.delete_dataset(decoded)
+        await cognee.forget(decoded)
     except Exception as exc:
-        logger.error("cognee.delete_dataset failed: %s", exc, exc_info=True)
+        logger.error("cognee.forget failed: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to delete dataset: {exc}",
+            detail=f"Failed to forget dataset: {exc}",
         )
 
     logger.info("memory/forget complete dataset=%s", decoded)
@@ -258,13 +258,14 @@ async def memory_stats(
     _: Annotated[None, Depends(verify_token)],
 ) -> StatsResponse:
     """
-    Return node and edge counts for a dataset.
+    Return node and edge counts.
+    cognee.visualize_graph() in 1.2.2 takes no keyword arguments.
     """
     decoded = unquote(dataset)
     logger.info("memory/stats dataset=%s", decoded)
 
     try:
-        graph_data = await cognee.visualize_graph(datasets=[decoded])
+        graph_data = await cognee.visualize_graph()
         nodes = len(graph_data.get("nodes", []))
         edges = len(graph_data.get("edges", []))
     except Exception as exc:
@@ -273,7 +274,6 @@ async def memory_stats(
             decoded,
             exc,
         )
-        # Stats failure is non-fatal — return zeros rather than 500
         nodes, edges = 0, 0
 
     return StatsResponse(nodes=nodes, edges=edges)

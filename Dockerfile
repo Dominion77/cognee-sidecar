@@ -4,23 +4,20 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
-# System dependencies
+# System dependencies + Node.js for solcjs
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         curl \
         git \
+        nodejs \
+        npm \
     && rm -rf /var/lib/apt/lists/*
 
-# Install solc static binary (Solidity compiler required by Slither).
-# We pin 0.8.20 as default. Slither will warn on pragma mismatches for
-# older contracts but will still analyse them.
-RUN curl -fsSL \
-    "https://github.com/ethereum/solidity/releases/download/v0.8.20/solc-static-linux" \
-    -o /usr/local/bin/solc \
-    && chmod +x /usr/local/bin/solc
+# Install solc via npm
+RUN npm install -g solc
 
-# Verify solc is on PATH
-RUN solc --version
+# Verify solcjs is available
+RUN node -e "require('solc')" && echo "solcjs OK"
 
 # Install Slither on top of the cognee base image
 RUN pip install --no-cache-dir slither-analyzer
