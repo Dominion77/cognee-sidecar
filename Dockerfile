@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir solc-select \
 # Verify solc is on PATH
 RUN solc --version
 
-# Install Slither
+# Install Slither on top of the cognee base image
 RUN pip install --no-cache-dir slither-analyzer
 
 # Verify Slither is on PATH
@@ -26,11 +26,16 @@ RUN slither --version
 
 WORKDIR /app
 
+# Ensure Cognee's SQLite database directory exists with correct permissions
+RUN mkdir -p /app/cognee/.cognee_system/databases \
+    && chmod -R 777 /app/cognee/.cognee_system
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY models.py pipeline.py server.py ./
 
+# Override whatever CMD/ENTRYPOINT the base image defines
 ENTRYPOINT []
 EXPOSE 8000
 CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

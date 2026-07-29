@@ -4,7 +4,7 @@ load_dotenv()
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import Annotated, Any, List, Optional
+from typing import Annotated, List
 from urllib.parse import unquote
 
 import cognee
@@ -66,7 +66,6 @@ app = FastAPI(
 
 
 
-
 def _get_token() -> str:
     return os.environ["COGNEE_SIDECAR_TOKEN"]
 
@@ -94,7 +93,6 @@ def verify_token(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Invalid token",
         )
-
 
 
 class AddRequest(BaseModel):
@@ -139,7 +137,7 @@ async def health() -> dict:
 async def memory_ping(
     _: Annotated[None, Depends(verify_token)],
 ) -> dict:
-    """Liveness check for the memory API specifically."""
+    """Liveness check for the memory API."""
     return {"status": "ok"}
 
 
@@ -148,10 +146,7 @@ async def memory_add(
     request: AddRequest,
     _: Annotated[None, Depends(verify_token)],
 ) -> AddResponse:
-    """
-    Add content to a Cognee dataset.
-    Returns a stable ID derived from dataset + content for Axum to track.
-    """
+    """Add content to a Cognee dataset."""
     logger.info("memory/add dataset=%s tags=%s", request.dataset, request.tags)
 
     try:
@@ -168,7 +163,6 @@ async def memory_add(
         )
 
     # Cognee's add() doesn't return a UUID — generate a deterministic one
-    # from dataset + content so Axum has a stable ID to reference.
     import hashlib
     import uuid
     digest = hashlib.sha256(
@@ -185,10 +179,7 @@ async def memory_recall(
     request: RecallRequest,
     _: Annotated[None, Depends(verify_token)],
 ) -> RecallResponse:
-    """
-    Search Cognee memory for content similar to the query.
-    Returns ranked matches with scores.
-    """
+    """Search Cognee memory for content similar to the query."""
     logger.info(
         "memory/recall dataset=%s query=%s top_k=%d",
         request.dataset,
@@ -211,7 +202,6 @@ async def memory_recall(
 
     matches: List[MemoryMatch] = []
     for i, result in enumerate(results[: request.top_k]):
-        # Cognee search results vary by version — handle both dict and object
         if isinstance(result, dict):
             content = result.get("text") or result.get("content") or str(result)
             score = float(result.get("score", 1.0 - i * 0.1))
@@ -233,19 +223,20 @@ async def memory_forget_dataset(
     _: Annotated[None, Depends(verify_token)],
 ) -> dict:
     """
-    Delete an entire Cognee dataset (GDPR / confidentiality compliance).
-    Uses cognee.forget() — correct API for Cognee 1.2.2+.
+    Reset Cognee memory.
+    cognee 1.2.2: forget() takes no arguments — resets all memory.
     """
     decoded = unquote(dataset)
     logger.info("memory/forget dataset=%s", decoded)
 
     try:
-        await cognee.forget(decoded)
+        # cognee 1.2.2 forget() takes no positional arguments
+        await cognee.forget()
     except Exception as exc:
         logger.error("cognee.forget failed: %s", exc, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to forget dataset: {exc}",
+            detail=f"Failed to forget: {exc}",
         )
 
     logger.info("memory/forget complete dataset=%s", decoded)
@@ -259,7 +250,8 @@ async def memory_stats(
 ) -> StatsResponse:
     """
     Return node and edge counts.
-    cognee.visualize_graph() in 1.2.2 takes no keyword arguments.
+    cognee 1.2.2: visualize_graph() takes no keyword arguments.
+    Failure is non-fatal — returns zeros.
     """
     decoded = unquote(dataset)
     logger.info("memory/stats dataset=%s", decoded)
@@ -329,4 +321,5 @@ async def audit(
         elapsed_ms,
     )
 
+    # by_alias=True so SlitherElement serializes `type` not `element_type`
     return JSONResponse(content=result.model_dump(by_alias=True))

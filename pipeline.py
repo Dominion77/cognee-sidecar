@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 #   0   — success, no detectors triggered
 #   1   — success, detectors triggered (findings found) — NOT an error
 #   2   — compilation failure
-#   255 — internal Slither error (commonly: solc not found or wrong version)
+#   255 — known Slither bug: exits 255 even on successful analysis with
+#          certain solc versions. We trust the JSON stdout over the exit code.
 _SLITHER_ERROR_THRESHOLD = 2
 
 
@@ -62,8 +63,7 @@ async def run_slither(source_code: str, contract_name: str) -> SlitherReport:
         stdout_text = stdout_bytes.decode("utf-8", errors="replace").strip()
         stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
 
-        # Always log stderr so Render logs show the actual Slither error
-        # instead of silence — critical for debugging solc issues
+        # Always log stderr at INFO so Render logs show the actual error
         if stderr_text:
             logger.info(
                 "Slither stderr [%s]: %s",
@@ -71,15 +71,23 @@ async def run_slither(source_code: str, contract_name: str) -> SlitherReport:
                 stderr_text[:2000],
             )
 
-        # Exit code 0 = no findings, exit code 1 = findings found — both success.
-        # Exit code 2+ = compilation failure or internal error.
-        # Exit code 255 = Slither internal error (solc missing/wrong version).
+        if stdout_text:
+            report = _parse_slither_json(stdout_text, contract_name)
+            if report.success or report.detectors:
+                if proc.returncode not in (0, 1):
+                    logger.info(
+                        "Slither exited %d but stdout is valid — using JSON result for contract=%s",
+                        proc.returncode,
+                        contract_name,
+                    )
+                return report
+
+        # stdout is empty or unparseable — now check exit code
         if proc.returncode is not None and proc.returncode >= _SLITHER_ERROR_THRESHOLD:
             logger.error(
-                "Slither error (exit=%d) for contract=%s stdout=%r stderr=%r",
+                "Slither hard failure (exit=%d) for contract=%s stderr=%r",
                 proc.returncode,
                 contract_name,
-                stdout_text[:500],
                 stderr_text[:500],
             )
             return SlitherReport(success=False, detectors=[])
@@ -164,9 +172,6 @@ def _build_cognee_text(
 ) -> str:
     """
     Serialize SlitherReport into structured plain text for Cognee ingestion.
-    Contract-identifying names from the Solidity source are NOT present here —
-    Slither element names are included because the anonymization step happens
-    in the Axum PatternAbstractor after this response returns.
     """
     lines = [
         f"Contract: {contract_name}",
@@ -199,8 +204,7 @@ async def run_cognee_pipeline(
     """
     Add Slither findings text to Cognee and run cognify for graph extraction.
     Cognee failure does not abort the audit — Slither results are still
-    returned to Axum. The error is logged and re-raised so the caller
-    can decide whether to surface it.
+    returned to Axum regardless.
     """
     if not report.detectors:
         logger.info(
@@ -229,10 +233,6 @@ async def run_audit_pipeline(
       1. Run Slither on the provided Solidity source
       2. Run Cognee cognify on the findings
       3. Return (SlitherReport, elapsed_ms)
-
-    elapsed_ms covers both steps so Axum can log the total sidecar time.
-    Cognee errors are logged but do not fail the audit — Axum always
-    receives a SlitherReport regardless.
     """
     start = time.monotonic()
 
