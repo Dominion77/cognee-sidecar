@@ -50,7 +50,11 @@ async def lifespan(app: FastAPI):
                 "llm_endpoint": os.getenv("LLM_BASE_URL", None),
             }
         )
-    except Exception as exc:
+        
+        await cognee.setup()
+        logger.info("cognee setup complete")
+        
+        except Exception as exc:
         logger.error("Failed to configure Cognee on startup: %s", exc)
         raise
 
