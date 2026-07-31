@@ -8,6 +8,7 @@ from typing import Annotated, List
 from urllib.parse import unquote
 
 import cognee
+from cognee.api.v1.search.search import SearchType
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -46,6 +47,7 @@ async def lifespan(app: FastAPI):
                 "llm_api_key": os.environ["LLM_API_KEY"],
                 "llm_provider": os.getenv("LLM_PROVIDER", "openai"),
                 "llm_model": os.getenv("LLM_MODEL", "gpt-4o-mini"),
+                "llm_endpoint": os.getenv("LLM_BASE_URL", None),
             }
         )
     except Exception as exc:
@@ -132,7 +134,6 @@ async def health() -> dict:
     return {"status": "ok", "service": "wyrmkeep-sidecar"}
 
 
-
 @app.get("/memory/ping")
 async def memory_ping(
     _: Annotated[None, Depends(verify_token)],
@@ -188,9 +189,10 @@ async def memory_recall(
     )
 
     try:
+        # query_type must be a SearchType enum — not a plain string
         results = await cognee.search(
             query_text=request.query,
-            query_type="GRAPH_COMPLETION",
+            query_type=SearchType.GRAPH_COMPLETION,
             datasets=[request.dataset],
         )
     except Exception as exc:
@@ -230,7 +232,6 @@ async def memory_forget_dataset(
     logger.info("memory/forget dataset=%s", decoded)
 
     try:
-        # cognee 1.2.2 forget() takes no positional arguments
         await cognee.forget()
     except Exception as exc:
         logger.error("cognee.forget failed: %s", exc, exc_info=True)
@@ -249,15 +250,14 @@ async def memory_stats(
     _: Annotated[None, Depends(verify_token)],
 ) -> StatsResponse:
     """
-    Return node and edge counts.
-    cognee 1.2.2: visualize_graph() takes no keyword arguments.
-    Failure is non-fatal — returns zeros.
+    Return node and edge counts for a dataset.
+    cognee 1.2.2 with auth enabled requires dataset argument.
     """
     decoded = unquote(dataset)
     logger.info("memory/stats dataset=%s", decoded)
 
     try:
-        graph_data = await cognee.visualize_graph()
+        graph_data = await cognee.visualize_graph(dataset=decoded)
         nodes = len(graph_data.get("nodes", []))
         edges = len(graph_data.get("edges", []))
     except Exception as exc:
