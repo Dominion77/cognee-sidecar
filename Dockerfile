@@ -18,8 +18,8 @@ RUN pip install --no-cache-dir solc-select \
 # Verify solc is on PATH
 RUN solc --version
 
-# Install Slither on top of the cognee base image
-RUN pip install --no-cache-dir slither-analyzer
+# Install Slither and fastembed on top of the cognee base image
+RUN pip install --no-cache-dir slither-analyzer fastembed
 
 # Verify Slither is on PATH
 RUN slither --version
