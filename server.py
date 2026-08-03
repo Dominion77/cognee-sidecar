@@ -51,7 +51,7 @@ async def lifespan(app: FastAPI):
             }
         )
 
-    await cognee.setup()
+        await cognee.setup()
         logger.info("cognee setup complete")
         
     except Exception as exc:
