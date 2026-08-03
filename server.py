@@ -36,7 +36,6 @@ def _check_required_env() -> None:
         )
 
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _check_required_env()
@@ -51,8 +50,7 @@ async def lifespan(app: FastAPI):
             }
         )
 
-        await cognee.setup()
-        logger.info("cognee setup complete")
+        logger.info("cognee configuration set (auto-initialization active)")
         
     except Exception as exc:
         logger.error("Failed to configure Cognee on startup: %s", exc)
@@ -69,7 +67,6 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
-
 
 
 def _get_token() -> str:
@@ -130,7 +127,6 @@ class RecallResponse(BaseModel):
 class StatsResponse(BaseModel):
     nodes: int
     edges: int
-
 
 
 @app.get("/health", include_in_schema=False)
@@ -273,7 +269,6 @@ async def memory_stats(
         nodes, edges = 0, 0
 
     return StatsResponse(nodes=nodes, edges=edges)
-
 
 
 @app.post("/audit")
