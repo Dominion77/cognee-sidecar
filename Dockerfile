@@ -18,11 +18,12 @@ RUN pip install --no-cache-dir solc-select \
 # Verify solc is on PATH
 RUN solc --version
 
-# Install Slither and fastembed on top of the cognee base image
-RUN pip install --no-cache-dir slither-analyzer fastembed
+# Install Slither and fastembed on top of the cognee base image using python -m pip
+# This ensures it installs into the exact Python environment used by the app.
+RUN python -m pip install --no-cache-dir slither-analyzer 'cognee[fastembed]' fastembed
 
-# Verify Slither is on PATH
-RUN slither --version
+# Verify Slither and fastembed are installed correctly
+RUN slither --version && python -c "import fastembed; print('FASTEMBED SUCCESSFULLY INSTALLED!')"
 
 WORKDIR /app
 
