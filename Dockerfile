@@ -18,8 +18,11 @@ RUN pip install --no-cache-dir solc-select \
 # Verify solc is on PATH
 RUN solc --version
 
-# Install Slither and fastembed on top of the cognee base image using python -m pip
-# This ensures it installs into the exact Python environment used by the app.
+# The base image's virtual environment does not have pip installed.
+# We must install pip into the active virtualenv first, so packages go to the right place.
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python
+
+# Now install Slither and fastembed directly into the active Python environment
 RUN python -m pip install --no-cache-dir slither-analyzer 'cognee[fastembed]' fastembed
 
 # Verify Slither and fastembed are installed correctly
@@ -32,7 +35,7 @@ RUN mkdir -p /app/cognee/.cognee_system/databases \
     && chmod -R 777 /app/cognee/.cognee_system
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m pip install --no-cache-dir -r requirements.txt
 
 COPY models.py pipeline.py server.py ./
 
