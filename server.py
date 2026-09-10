@@ -50,8 +50,23 @@ async def lifespan(app: FastAPI):
             }
         )
 
-        logger.info("cognee configuration set (auto-initialization active)")
-        
+        logger.info("cognee configuration set")
+
+        # Run Cognee setup & migrations on startup so the database is ready
+        # and doesn't block or cause timeouts during incoming audit requests
+        try:
+            if hasattr(cognee, "setup"):
+                await cognee.setup()
+            elif hasattr(cognee, "low_level") and hasattr(cognee.low_level, "setup"):
+                await cognee.low_level.setup()
+
+            if hasattr(cognee, "run_migrations"):
+                await cognee.run_migrations()
+
+            logger.info("Cognee database setup & migrations completed successfully")
+        except Exception as init_exc:
+            logger.warning("Cognee startup initialization warning: %s", init_exc)
+
     except Exception as exc:
         logger.error("Failed to configure Cognee on startup: %s", exc)
         raise

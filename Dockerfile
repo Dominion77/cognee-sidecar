@@ -27,8 +27,10 @@ RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python
 # Now install Slither and fastembed directly into the active Python environment
 RUN python -m pip install --no-cache-dir slither-analyzer 'cognee[fastembed]' fastembed
 
-# Verify Slither and fastembed are installed correctly
-RUN slither --version && python -c "import fastembed; print('FASTEMBED SUCCESSFULLY INSTALLED!')"
+# Verify Slither and fastembed are installed correctly, and pre-download the embedding model
+# so it is baked into the image and never fetched at runtime
+RUN slither --version \
+    && python -c "from fastembed import TextEmbedding; list(TextEmbedding('BAAI/bge-small-en-v1.5').embed(['warmup'])); print('FASTEMBED MODEL PRE-DOWNLOADED!')"
 
 WORKDIR /app
 
