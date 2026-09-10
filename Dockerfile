@@ -59,9 +59,10 @@ print('HF TOKENIZER OK')" \
 
 WORKDIR /app
 
-# Ensure Cognee's SQLite database directory exists with correct permissions
-RUN mkdir -p /app/cognee/.cognee_system/databases \
-    && chmod -R 777 /app/cognee/.cognee_system
+# Ensure Cognee's SQLite and storage directories exist with correct permissions
+RUN mkdir -p /app/cognee/.cognee_system/databases /cognee-storage/system/databases \
+    && chmod -R 777 /app/cognee/.cognee_system /cognee-storage \
+    && chown -R 1000:1000 /app/cognee/.cognee_system /cognee-storage
 
 COPY requirements.txt .
 RUN python -m pip install --no-cache-dir -r requirements.txt
@@ -74,4 +75,4 @@ USER 1000
 # Override whatever CMD/ENTRYPOINT the base image defines
 ENTRYPOINT []
 EXPOSE 8000
-CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["sh", "-c", "uvicorn server:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1"]

@@ -9,8 +9,6 @@ from contextlib import asynccontextmanager
 from typing import Annotated, List
 from urllib.parse import unquote
 
-import cognee
-from cognee.api.v1.search.search import SearchType
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -56,6 +54,18 @@ async def _ensure_cognee_ready() -> None:
         logger.info("Lazy-initializing Cognee (first request)…")
 
         try:
+            import cognee
+
+            cognee.config.set_llm_config(
+                {
+                    "llm_api_key": os.environ["LLM_API_KEY"],
+                    "llm_provider": os.getenv("LLM_PROVIDER", "openai"),
+                    "llm_model": os.getenv("LLM_MODEL", "gpt-4o-mini"),
+                    "llm_endpoint": os.getenv("LLM_BASE_URL", None),
+                }
+            )
+            logger.info("cognee configuration set")
+
             if hasattr(cognee, "setup"):
                 await cognee.setup()
             elif hasattr(cognee, "low_level") and hasattr(cognee.low_level, "setup"):
@@ -78,21 +88,6 @@ async def _ensure_cognee_ready() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _check_required_env()
-
-    try:
-        cognee.config.set_llm_config(
-            {
-                "llm_api_key": os.environ["LLM_API_KEY"],
-                "llm_provider": os.getenv("LLM_PROVIDER", "openai"),
-                "llm_model": os.getenv("LLM_MODEL", "gpt-4o-mini"),
-                "llm_endpoint": os.getenv("LLM_BASE_URL", None),
-            }
-        )
-        logger.info("cognee configuration set")
-    except Exception as exc:
-        logger.error("Failed to configure Cognee on startup: %s", exc)
-        raise
-
     logger.info("Wyrmkeep sidecar ready")
     yield
     logger.info("Wyrmkeep sidecar shutting down")
@@ -187,6 +182,7 @@ async def memory_add(
 ) -> AddResponse:
     """Add content to a Cognee dataset."""
     await _ensure_cognee_ready()
+    import cognee
     logger.info("memory/add dataset=%s tags=%s", request.dataset, request.tags)
 
     try:
@@ -221,6 +217,8 @@ async def memory_recall(
 ) -> RecallResponse:
     """Search Cognee memory for content similar to the query."""
     await _ensure_cognee_ready()
+    import cognee
+    from cognee.api.v1.search.search import SearchType
     logger.info(
         "memory/recall dataset=%s query=%s top_k=%d",
         request.dataset,
@@ -269,6 +267,7 @@ async def memory_forget_dataset(
     cognee 1.2.2: forget() takes no arguments — resets all memory.
     """
     await _ensure_cognee_ready()
+    import cognee
     decoded = unquote(dataset)
     logger.info("memory/forget dataset=%s", decoded)
 
@@ -295,6 +294,7 @@ async def memory_stats(
     cognee 1.2.2 with auth enabled requires dataset argument.
     """
     await _ensure_cognee_ready()
+    import cognee
     decoded = unquote(dataset)
     logger.info("memory/stats dataset=%s", decoded)
 

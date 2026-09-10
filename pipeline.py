@@ -6,7 +6,6 @@ import tempfile
 import time
 from typing import List, Tuple
 
-import cognee
 
 from models import SlitherDetector, SlitherElement, SlitherReport
 
@@ -215,6 +214,7 @@ async def run_cognee_pipeline(
 
     text = _build_cognee_text(report, contract_name, node_set)
 
+    import cognee  # Lazy import — keeps module load lightweight
     await cognee.add(text, dataset_name=dataset, node_set=node_set)
     logger.info("cognee.add complete dataset=%s contract=%s", dataset, contract_name)
 
