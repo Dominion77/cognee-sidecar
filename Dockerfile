@@ -10,6 +10,10 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV FASTEMBED_CACHE_PATH=/opt/fastembed_cache
 ENV HF_HOME=/opt/hf_home
 
+# Limit ONNX Runtime to 1 thread — cuts RSS from ~400MB to ~200MB
+ENV OMP_NUM_THREADS=1
+ENV TOKENIZERS_PARALLELISM=false
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         curl \
@@ -31,16 +35,20 @@ RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python
 # Now install Slither and fastembed directly into the active Python environment
 RUN python -m pip install --no-cache-dir slither-analyzer 'cognee[fastembed]' fastembed
 
-# Pre-download the embedding model into the persistent cache so it is
-# baked into the image layer and never fetched from HuggingFace at runtime.
+# Pre-download the embedding model AND its HuggingFace tokenizer so
+# nothing is ever fetched from the internet at runtime.
 RUN mkdir -p "$FASTEMBED_CACHE_PATH" "$HF_HOME" \
     && slither --version \
     && python -c "\
+import os; \
 from fastembed import TextEmbedding; \
 m = TextEmbedding('BAAI/bge-small-en-v1.5'); \
 list(m.embed(['warmup'])); \
-print('FASTEMBED MODEL PRE-DOWNLOADED!')" \
-    && chmod -R a+rX "$FASTEMBED_CACHE_PATH" "$HF_HOME"
+print('FASTEMBED ONNX MODEL OK'); \
+from huggingface_hub import snapshot_download; \
+snapshot_download('BAAI/bge-small-en-v1.5', cache_dir=os.environ['HF_HOME']); \
+print('HF TOKENIZER OK')" \
+    && chown -R 1000:1000 "$FASTEMBED_CACHE_PATH" "$HF_HOME"
 
 WORKDIR /app
 
