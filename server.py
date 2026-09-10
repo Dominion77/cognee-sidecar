@@ -1,6 +1,8 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+import asyncio
+import gc
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -36,6 +38,43 @@ def _check_required_env() -> None:
         )
 
 
+# Lazy Cognee initialization
+_cognee_ready = False
+_cognee_lock = asyncio.Lock()
+
+
+async def _ensure_cognee_ready() -> None:
+    """Run Cognee setup & migrations exactly once, on first real request."""
+    global _cognee_ready
+    if _cognee_ready:
+        return
+
+    async with _cognee_lock:
+        if _cognee_ready:          # double-check after acquiring lock
+            return
+
+        logger.info("Lazy-initializing Cognee (first request)…")
+
+        try:
+            if hasattr(cognee, "setup"):
+                await cognee.setup()
+            elif hasattr(cognee, "low_level") and hasattr(cognee.low_level, "setup"):
+                await cognee.low_level.setup()
+
+            # Free migration / alembic memory before ONNX model loads
+            gc.collect()
+
+            if hasattr(cognee, "run_migrations"):
+                await cognee.run_migrations()
+
+            gc.collect()
+            logger.info("Cognee database setup & migrations completed")
+        except Exception as exc:
+            logger.warning("Cognee initialization warning: %s", exc)
+
+        _cognee_ready = True
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _check_required_env()
@@ -49,24 +88,7 @@ async def lifespan(app: FastAPI):
                 "llm_endpoint": os.getenv("LLM_BASE_URL", None),
             }
         )
-
         logger.info("cognee configuration set")
-
-        # Run Cognee setup & migrations on startup so the database is ready
-        # and doesn't block or cause timeouts during incoming audit requests
-        try:
-            if hasattr(cognee, "setup"):
-                await cognee.setup()
-            elif hasattr(cognee, "low_level") and hasattr(cognee.low_level, "setup"):
-                await cognee.low_level.setup()
-
-            if hasattr(cognee, "run_migrations"):
-                await cognee.run_migrations()
-
-            logger.info("Cognee database setup & migrations completed successfully")
-        except Exception as init_exc:
-            logger.warning("Cognee startup initialization warning: %s", init_exc)
-
     except Exception as exc:
         logger.error("Failed to configure Cognee on startup: %s", exc)
         raise
@@ -74,6 +96,7 @@ async def lifespan(app: FastAPI):
     logger.info("Wyrmkeep sidecar ready")
     yield
     logger.info("Wyrmkeep sidecar shutting down")
+
 
 
 app = FastAPI(
@@ -163,6 +186,7 @@ async def memory_add(
     _: Annotated[None, Depends(verify_token)],
 ) -> AddResponse:
     """Add content to a Cognee dataset."""
+    await _ensure_cognee_ready()
     logger.info("memory/add dataset=%s tags=%s", request.dataset, request.tags)
 
     try:
@@ -196,6 +220,7 @@ async def memory_recall(
     _: Annotated[None, Depends(verify_token)],
 ) -> RecallResponse:
     """Search Cognee memory for content similar to the query."""
+    await _ensure_cognee_ready()
     logger.info(
         "memory/recall dataset=%s query=%s top_k=%d",
         request.dataset,
@@ -243,6 +268,7 @@ async def memory_forget_dataset(
     Reset Cognee memory.
     cognee 1.2.2: forget() takes no arguments — resets all memory.
     """
+    await _ensure_cognee_ready()
     decoded = unquote(dataset)
     logger.info("memory/forget dataset=%s", decoded)
 
@@ -268,6 +294,7 @@ async def memory_stats(
     Return node and edge counts for a dataset.
     cognee 1.2.2 with auth enabled requires dataset argument.
     """
+    await _ensure_cognee_ready()
     decoded = unquote(dataset)
     logger.info("memory/stats dataset=%s", decoded)
 
@@ -296,6 +323,7 @@ async def audit(
     Accepts raw Solidity source, runs Slither, runs Cognee cognify,
     returns SidecarAuditResult. One call per audit.
     """
+    await _ensure_cognee_ready()
     logger.info(
         "Audit request: contract=%s dataset=%s node_set=%s",
         request.contract_name,
