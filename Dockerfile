@@ -6,6 +6,10 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
 
+# Persistent cache for fastembed & HuggingFace models
+ENV FASTEMBED_CACHE_PATH=/opt/fastembed_cache
+ENV HF_HOME=/opt/hf_home
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         curl \
@@ -27,10 +31,16 @@ RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python
 # Now install Slither and fastembed directly into the active Python environment
 RUN python -m pip install --no-cache-dir slither-analyzer 'cognee[fastembed]' fastembed
 
-# Verify Slither and fastembed are installed correctly, and pre-download the embedding model
-# so it is baked into the image and never fetched at runtime
-RUN slither --version \
-    && python -c "from fastembed import TextEmbedding; list(TextEmbedding('BAAI/bge-small-en-v1.5').embed(['warmup'])); print('FASTEMBED MODEL PRE-DOWNLOADED!')"
+# Pre-download the embedding model into the persistent cache so it is
+# baked into the image layer and never fetched from HuggingFace at runtime.
+RUN mkdir -p "$FASTEMBED_CACHE_PATH" "$HF_HOME" \
+    && slither --version \
+    && python -c "\
+from fastembed import TextEmbedding; \
+m = TextEmbedding('BAAI/bge-small-en-v1.5'); \
+list(m.embed(['warmup'])); \
+print('FASTEMBED MODEL PRE-DOWNLOADED!')" \
+    && chmod -R a+rX "$FASTEMBED_CACHE_PATH" "$HF_HOME"
 
 WORKDIR /app
 
@@ -42,6 +52,9 @@ COPY requirements.txt .
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
 COPY models.py pipeline.py server.py ./
+
+# Switch back to the non-root cognee user from the base image (UID 1000)
+USER 1000
 
 # Override whatever CMD/ENTRYPOINT the base image defines
 ENTRYPOINT []
