@@ -10,9 +10,16 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV FASTEMBED_CACHE_PATH=/opt/fastembed_cache
 ENV HF_HOME=/opt/hf_home
 
-# Limit ONNX Runtime to 1 thread — cuts RSS from ~400MB to ~200MB
+# ── Memory budget: stay under Render's 512 MB ──
+# Single ONNX intra-op thread (default = cpu_count, each thread ~50MB stack)
 ENV OMP_NUM_THREADS=1
 ENV TOKENIZERS_PARALLELISM=false
+# Reduce glibc arena overhead (default 8 arenas × 64MB each)
+ENV MALLOC_ARENA_MAX=2
+# Force allocations ≥ 32KB through mmap so they're returned to OS on free
+ENV MALLOC_MMAP_THRESHOLD_=32768
+# Tell ONNX Runtime to use minimal session options
+ENV ORT_DISABLE_ALL=1
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
