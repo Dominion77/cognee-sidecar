@@ -88,6 +88,7 @@ async def _ensure_cognee_ready() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _check_required_env()
+    await _ensure_cognee_ready()
     logger.info("Wyrmkeep sidecar ready")
     yield
     logger.info("Wyrmkeep sidecar shutting down")
