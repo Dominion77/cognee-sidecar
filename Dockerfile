@@ -15,7 +15,7 @@ ENV HF_HOME=/opt/hf_home
 ENV OMP_NUM_THREADS=1
 ENV TOKENIZERS_PARALLELISM=false
 # Reduce glibc arena overhead (default 8 arenas × 64MB each)
-ENV MALLOC_ARENA_MAX=2
+ENV MALLOC_ARENA_MAX=1
 # Force allocations ≥ 32KB through mmap so they're returned to OS on free
 ENV MALLOC_MMAP_THRESHOLD_=32768
 # Tell ONNX Runtime to use minimal session options
