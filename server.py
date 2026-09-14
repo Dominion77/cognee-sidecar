@@ -64,6 +64,14 @@ async def _ensure_cognee_ready() -> None:
                     "llm_endpoint": os.getenv("LLM_BASE_URL", None),
                 }
             )
+            cognee.config.set_embedding_config(
+                {
+                    "embedding_provider": os.getenv("EMBEDDING_PROVIDER", "openai"),
+                    "embedding_api_key": os.getenv("EMBEDDING_API_KEY", os.environ["LLM_API_KEY"]),
+                    "embedding_model": os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"),
+                    "embedding_endpoint": os.getenv("EMBEDDING_BASE_URL", None),
+                }
+            )
             logger.info("cognee configuration set")
 
             if hasattr(cognee, "setup"):
