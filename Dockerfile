@@ -22,6 +22,9 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Install solc-select and a pinned solc version
+# solc-select puts the active solc shim in ~/.solc-select/global-version
+# and the actual binary in ~/.solc-select/artifacts/
+ENV PATH="/root/.solc-select/artifacts/solc-0.8.20:${PATH}"
 RUN pip install --no-cache-dir solc-select \
     && solc-select install 0.8.20 \
     && solc-select use 0.8.20

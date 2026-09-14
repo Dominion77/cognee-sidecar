@@ -100,7 +100,14 @@ async def run_slither(source_code: str, contract_name: str) -> SlitherReport:
         return _parse_slither_json(stdout_text, contract_name)
 
     except FileNotFoundError:
-        logger.error("Slither binary not found in PATH")
+        import shutil
+        slither_path = shutil.which("slither")
+        logger.error(
+            "Slither binary not found in PATH. "
+            "which('slither')=%s  PATH=%s",
+            slither_path,
+            os.environ.get("PATH", "<unset>"),
+        )
         raise RuntimeError(
             "slither not found — ensure slither-analyzer is installed in the container"
         )
