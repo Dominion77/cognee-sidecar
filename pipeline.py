@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import subprocess
 import tempfile
 import time
 from typing import List, Tuple
@@ -25,6 +26,11 @@ async def run_slither(source_code: str, contract_name: str) -> SlitherReport:
     Write Solidity source to a temp file, run Slither with JSON output,
     parse the result, and clean up. Never raises — returns a failed
     SlitherReport on all error paths so the caller always gets a result.
+
+    Uses subprocess.run in a thread pool (via asyncio.to_thread) instead of
+    asyncio.create_subprocess_exec to avoid fork() — which destabilizes
+    LanceDB's internal async runtime on Linux.  Python 3.12+ uses
+    posix_spawn() under the hood, side-stepping the issue entirely.
     """
     tmp_path: str | None = None
 
@@ -38,29 +44,21 @@ async def run_slither(source_code: str, contract_name: str) -> SlitherReport:
             f.write(source_code)
             tmp_path = f.name
 
-        proc = await asyncio.create_subprocess_exec(
-            "slither",
-            tmp_path,
-            "--json",
-            "-",
-            "--disable-color",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
+        # Run slither in a thread to keep the event loop free.
+        # subprocess.run (Python 3.12+) uses posix_spawn, not fork.
         try:
-            stdout_bytes, stderr_bytes = await asyncio.wait_for(
-                proc.communicate(),
-                timeout=120.0,
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["slither", tmp_path, "--json", "-", "--disable-color"],
+                capture_output=True,
+                timeout=120,
             )
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
+        except subprocess.TimeoutExpired:
             logger.error("Slither timed out on contract=%s", contract_name)
             return SlitherReport(success=False, detectors=[])
 
-        stdout_text = stdout_bytes.decode("utf-8", errors="replace").strip()
-        stderr_text = stderr_bytes.decode("utf-8", errors="replace").strip()
+        stdout_text = result.stdout.decode("utf-8", errors="replace").strip()
+        stderr_text = result.stderr.decode("utf-8", errors="replace").strip()
 
         # Always log stderr at INFO so Render logs show the actual error
         if stderr_text:
@@ -73,19 +71,19 @@ async def run_slither(source_code: str, contract_name: str) -> SlitherReport:
         if stdout_text:
             report = _parse_slither_json(stdout_text, contract_name)
             if report.success or report.detectors:
-                if proc.returncode not in (0, 1):
+                if result.returncode not in (0, 1):
                     logger.info(
                         "Slither exited %d but stdout is valid — using JSON result for contract=%s",
-                        proc.returncode,
+                        result.returncode,
                         contract_name,
                     )
                 return report
 
         # stdout is empty or unparseable — now check exit code
-        if proc.returncode is not None and proc.returncode >= _SLITHER_ERROR_THRESHOLD:
+        if result.returncode is not None and result.returncode >= _SLITHER_ERROR_THRESHOLD:
             logger.error(
                 "Slither hard failure (exit=%d) for contract=%s stderr=%r",
-                proc.returncode,
+                result.returncode,
                 contract_name,
                 stderr_text[:500],
             )
@@ -118,6 +116,7 @@ async def run_slither(source_code: str, contract_name: str) -> SlitherReport:
                 os.unlink(tmp_path)
             except OSError as e:
                 logger.warning("Failed to remove temp file %s: %s", tmp_path, e)
+
 
 
 def _parse_slither_json(raw: str, contract_name: str) -> SlitherReport:
