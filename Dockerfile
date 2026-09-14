@@ -12,6 +12,8 @@ ENV TOKENIZERS_PARALLELISM=false
 ENV MALLOC_ARENA_MAX=1
 # Force allocations ≥ 32KB through mmap so they're returned to OS on free
 ENV MALLOC_MMAP_THRESHOLD_=32768
+# Tell LanceDB to tolerate fork() — we only fork+exec for slither CLI
+ENV LANCEDB_FORK_SUPPORT=true
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

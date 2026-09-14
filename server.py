@@ -1,7 +1,13 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+import warnings
+# Suppress lancedb fork warning — our only fork+exec usage is spawning the
+# slither CLI binary, so no Python/LanceDB code runs in the forked child.
+warnings.filterwarnings("ignore", message="lancedb fork support", category=RuntimeWarning)
+
 import asyncio
+
 import gc
 import logging
 import os
